@@ -10,35 +10,42 @@ library(Seurat)
 ## @scRNADataLoc: The location of the scRNA-seq data
 ## @scRNACelltype: Cell types in the input single-cell data
 scRNALoad <- function(scRNADataLoc, scRNACelltype){
-  if(length(grep('\\.rds$',scRNADataLoc,ignore.case = T))==1){
-    scRNACount = readRDS(scRNADataLoc)
-    if(class(scRNACount) == 'data.frame'){
-      scRNACount = scRNACount
-    }else if(class(scRNACount) == 'dgCMatrix'){
-      scRNACount = data.frame(as.matrix(scRNACount))
-    }else{
-      scRNACount = GetAssayData(scRNACount, assay = 'RNA', slot = 'count')
-    }
-  }else if(length(grep('\\.txt$', scRNADataLoc, ignore.case = TRUE)) == 1){
-    scRNACount = read.table(scRNADataLoc, sep = '\t', stringsAsFactors = F, header = T)
-  }else if(length(grep('\\.csv$', scRNADataLoc, ignore.case = TRUE)) == 1){
-    scRNACount = read.csv(scRNADataLoc, sep = ',', stringsAsFactors = F, header = T)
-  }else{
-    stop("The input scRNA-seq data can only be in Seurat (.rds) or count matrix (.txt/.csv) format.")
-  }
+  scRNACount = readCountData(scRNADataLoc)
   scRNAData = CreateSeuratObject(scRNACount)
   scRNAData$celltype = scRNACelltype
   return(scRNAData)
+}
+
+### Read a raw count matrix (genes x cells) from a Seurat object, sparse matrix, data frame (.rds) or table (.txt/.csv)
+## @scRNADataLoc: The location of the scRNA-seq data
+readCountData <- function(scRNADataLoc){
+  if(grepl('\\.rds$', scRNADataLoc, ignore.case = TRUE)){
+    scRNACount = readRDS(scRNADataLoc)
+    if(inherits(scRNACount, 'Seurat')){
+      if(inherits(scRNACount[['RNA']], 'Assay5')){
+        scRNACount = GetAssayData(JoinLayers(scRNACount[['RNA']]), layer = 'counts')
+      }else{
+        scRNACount = GetAssayData(scRNACount, assay = 'RNA', slot = 'counts')
+      }
+    }
+  }else if(grepl('\\.txt$', scRNADataLoc, ignore.case = TRUE)){
+    scRNACount = read.table(scRNADataLoc, sep = '\t', stringsAsFactors = F, header = T, row.names = 1, check.names = F)
+  }else if(grepl('\\.csv$', scRNADataLoc, ignore.case = TRUE)){
+    scRNACount = read.csv(scRNADataLoc, sep = ',', stringsAsFactors = F, header = T, row.names = 1, check.names = F)
+  }else{
+    stop("The input scRNA-seq data can only be in Seurat (.rds) or count matrix (.txt/.csv) format.")
+  }
+  return(scRNACount)
 }
 
 ### Identify differentially expressed genes between initial and target cell types
 ## @iniCellData: The scRNA-seq data of initial cells
 ## @tarCellData: The scRNA-seq data of target cells
 gainDEGs <- function(seu_merge, iniCellType, tarCellType){
-  seu_merge[["percent.mt"]] <- PercentageFeatureSet(seu_merge, pattern = "^mt-")
+  seu_merge[["percent.mt"]] <- PercentageFeatureSet(seu_merge, pattern = "^(MT|mt|Mt)-") # human genes start with "MT-", mouse with "mt-"
   seu_merge <- subset(seu_merge, subset = nFeature_RNA > 200 & percent.mt < 20)
   seu_merge = NormalizeData(seu_merge)
-  if(packageVersion('Seurat') > 5){
+  if(packageVersion('Seurat') >= '5.0.0'){
     seu_merge = JoinLayers(seu_merge)
   }
   tarInitMarker =  FindMarkers(seu_merge, ident.1 = tarCellType, ident.2 = iniCellType, min.pct = 0.1, logfc.threshold = 0.25, only.pos = FALSE, group.by = 'celltype')
@@ -71,27 +78,14 @@ gainDETFs <- function(tarInitMarker, spices, log2FC_t){
 ### Obtain the count matrix of initial cell type
 ## @scRNADataLoc: The location of the scRNA-seq data
 getCountMatrix <- function(scRNADataLoc){
-  if(length(grep('\\.rds$',scRNADataLoc,ignore.case = T))==1){
-    scRNACount = readRDS(scRNADataLoc)
-    if(class(scRNACount) == 'data.frame'){
-      scRNACount = scRNACount
-    }else if(class(scRNACount) == 'dgCMatrix'){
-      scRNACount = data.frame(as.matrix(scRNACount))
-    }else{
-      scRNACount = GetAssayData(scRNACount, slot = 'count')
-    }
-  }else if(length(grep('\\.txt$', scRNADataLoc, ignore.case = TRUE)) == 1){
-    scRNACount = read.table(scRNADataLoc, sep = '\t', stringsAsFactors = F, header = T)
-  }else if(length(grep('\\.csv$', scRNADataLoc, ignore.case = TRUE)) == 1){
-    scRNACount = read.csv(scRNADataLoc, sep = ',', stringsAsFactors = F, header = T)
-  }
-  scRNACount = data.frame(scRNACount)
+  scRNACount = data.frame(as.matrix(readCountData(scRNADataLoc)), check.names = FALSE)
   return(scRNACount)
 }
 
 ### Perform single-cell processing and dimensionality reduction clustering
 ## @seu_merge: The Seurat object contains initial cell type and target cell type
 SeuratProcess <- function(seu_merge){
+  library(harmony)
   seu_merge <- NormalizeData(seu_merge)
   seu_merge <- FindVariableFeatures(seu_merge, nfeatures = 3000)
   seu_merge <- ScaleData(seu_merge, vars.to.regress = c("nCount_RNA", "nFeature_RNA", "percent.mt"))

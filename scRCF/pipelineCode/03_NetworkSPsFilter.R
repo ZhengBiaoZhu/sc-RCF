@@ -191,18 +191,21 @@ PathEntropy<-function(species,DETFs,g,candidate,initial_scRNA){
     te_pert_DETF_f<-unique(c(te_pert_DETF_f,proxyTF))
     te_pert_DETF_f<-te_pert_DETF_f[te_pert_DETF_f%in%as_ids(V(g))] # to ensure the query TFs being targeted by expressed interface TFs
   }
-  SigPathScore2 <-foreach(perttar=pert_SigMole, .combine=rbind, .inorder=FALSE, .multicombine=TRUE, .maxcombine = length(pert_SigMole),.packages="igraph") %dopar% {
+  # look up edge weights and the entropy of each edge's source node once, instead of once per path (same values, much faster)
+  edgeSurprisal <- E(g)$surprisal
+  edgeTailEntropy <- V(g)$entropy[as.integer(tail_of(g, E(g)))]
+  SigPathScore2 <-foreach(perttar=pert_SigMole, .combine=rbind, .inorder=TRUE, .multicombine=TRUE, .maxcombine = length(pert_SigMole),.packages="igraph") %dopar% {
     # find "shortest" path from a signalling molecule to first layer TFs
-    x <- shortest_paths(g,perttar,firstTFs,mode="out",weights=E(g)$surprisal,output = "epath")
-    edges = x$epath
+    x <- shortest_paths(g,perttar,firstTFs,mode="out",weights=edgeSurprisal,output = "epath")
+    edges = lapply(x$epath, as.integer)
     E=rep(NA,length(edges))
     P=rep(NA,length(edges))
     if(length(which(lengths(edges)!=0))!=0){
       ##calculate entropy,e.g.specifity
-      E[which(lengths(edges)!=0)]<- sapply(which(lengths(edges)!=0), function(y)sum(V(g)$entropy[tail_of(g,edges[[y]])]))
+      E[which(lengths(edges)!=0)]<- sapply(which(lengths(edges)!=0), function(y)sum(edgeTailEntropy[edges[[y]]]))
       E_re<-1/exp(as.numeric(E))
       ## calculate probablity,e.g.reachability
-      P[which(lengths(edges)!=0)]<- sapply(which(lengths(edges)!=0), function(y)sum(E(g)$surprisal[edges[[y]]]))
+      P[which(lengths(edges)!=0)]<- sapply(which(lengths(edges)!=0), function(y)sum(edgeSurprisal[edges[[y]]]))
       P_re<-1/exp(as.numeric(abs(P)))
       Score<-E_re*P_re
     }else{

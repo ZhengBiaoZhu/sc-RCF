@@ -1,5 +1,6 @@
 #!/bin/Rscript
 `%!in%` = Negate(`%in%`)
+invisible(Sys.setlocale("LC_CTYPE", "en_US.UTF-8")) # keep Greek letters (e.g. NF-κB, TGF-β) readable in the outputs
 
 args=commandArgs(TRUE)
 outDir = args[1] # The output directory for saving the results
@@ -8,6 +9,21 @@ iniCellLoc = args[3] # ScRNA-seq data of initial cells, which can be in Seurat (
 iniCellType = args[4] # The cell type of the initial scRNA-seq data
 tarCellLoc = args[5] # ScRNA-seq data of target cells, which can be in Seurat (.rds) or count (.txt/.csv) format
 tarCellType = args[6] # The cell type of the target scRNA-seq data
+if(length(args) < 6){
+  stop("Usage: Rscript Small-MoleculesFinder.R <outDir> <human|mouse> <iniCellFile> <iniCellType> <tarCellFile> <tarCellType>")
+}
+
+# Create the output folder, turn input/output paths into absolute ones, then move into this script's folder so the "../data/..." paths work from anywhere
+if(!dir.exists(outDir)){
+  dir.create(outDir, recursive = TRUE)
+}
+outDir = normalizePath(outDir)
+iniCellLoc = normalizePath(iniCellLoc, mustWork = TRUE)
+tarCellLoc = normalizePath(tarCellLoc, mustWork = TRUE)
+scriptArg = grep("^--file=", commandArgs(FALSE), value = TRUE)
+if(length(scriptArg) == 1){
+  setwd(dirname(normalizePath(sub("^--file=", "", scriptArg))))
+}
 
 library(writexl)
 source("01_InputProcess.R")
@@ -15,21 +31,19 @@ source("02_SPsPreSelection.R")
 source("03_NetworkSPsFilter.R")
 source("04_MapSPs2SM.R")
 
-# 0. Create the output directory
-if(!dir.exists(outDir)){
-  dir.create(outDir, recursive = TRUE)
-}
-
 # 1. Load the scRNA-seq data of initial and target cells 
 iniCellData = scRNALoad(iniCellLoc, iniCellType)
 tarCellData = scRNALoad(tarCellLoc, tarCellType)
 # Identify differentially expressed genes
-seu_merge = merge(iniCellData, tarCellData)
+seu_merge = merge(iniCellData, tarCellData, add.cell.ids = c("ini", "tar"))
 tarInitMarker = gainDEGs(seu_merge, iniCellType, tarCellType)
 # Identify differentially expressed transcription factors
 # The default threshold for avg_log2FC is 1
 log2FC_t = 1
 DETFs_list = gainDETFs(tarInitMarker, species, log2FC_t)
+DETFs_df = data.frame(TF = names(DETFs_list), Direction = ifelse(DETFs_list > 0, "up in target", "down in target"),
+                      tarInitMarker[names(DETFs_list), c("avg_log2FC", "pct.1", "pct.2", "p_val_adj")])
+writexl::write_xlsx(DETFs_df[order(-DETFs_df$avg_log2FC), ], paste0(outDir, "/", tarCellType, "-", iniCellType, "_DETFs.xlsx"))
 initCellCount = getCountMatrix(iniCellLoc)
 # (supplement)
 # seu_merge = SeuratProcess(seu_merge)
@@ -75,10 +89,10 @@ communities_f = communities[names(communities) %in% SelectSPsFinal$Protein]
 ChemScoreDf = pertChemScore(communities_f, chemTarDB, SelectSPsFinal, smallMoleculesCategory)
 classfy_df = CommuMajorCategory(pathway_info, ChemScoreDf)
 SmallMoleculeResult = gainFinalSmallMolecule(classfy_df, ChemScoreDf, pathway_info, 10)
-reprogram_drug = drug_function[drug_function$Reprogramming == 1, 'Chemicals']
+reprogram_drug = smallMoluculeFunc[smallMoluculeFunc$Reprogramming == 1, 'Chemicals']
 SmallMoleculeResult_f = SmallMoleculeResult[SmallMoleculeResult$pert %in% reprogram_drug, ]
 SmallMoleculeResult_f = SmallMoleculeResult_f[, colnames(SmallMoleculeResult_f) %!in% c('UnexpectEffect')]
 writexl::write_xlsx(classfy_df, paste0(outDir, "/", tarCellType, "-", iniCellType, "_classfy_df.xlsx"))
 writexl::write_xlsx(SmallMoleculeResult, paste0(outDir, "/", tarCellType, "-", iniCellType, "_SmallMoleculeResult.xlsx"))
-writexl::write_xlsx(SmallMoleculeResult_f, paste0(outDir, "/", tarCellType, "-", iniCellType, "SmallMoleculeResult_f.xlsx"))
+writexl::write_xlsx(SmallMoleculeResult_f, paste0(outDir, "/", tarCellType, "-", iniCellType, "_SmallMoleculeResult_f.xlsx"))
 
